@@ -1424,6 +1424,7 @@ void initServerConfig(void) {
     server.rdb_filename = zstrdup(REDIS_DEFAULT_RDB_FILENAME);
     server.aof_filename = zstrdup(REDIS_DEFAULT_AOF_FILENAME);
     server.requirepass = NULL;
+    server.requirepass2 = NULL;
     server.rdb_compression = REDIS_DEFAULT_RDB_COMPRESSION;
     server.rdb_checksum = REDIS_DEFAULT_RDB_CHECKSUM;
     server.stop_writes_on_bgsave_err = REDIS_DEFAULT_STOP_WRITES_ON_BGSAVE_ERROR;
@@ -2108,7 +2109,7 @@ int processCommand(redisClient *c) {
     }
 
     /* Check if the user is authenticated */
-    if (server.requirepass && !c->authenticated && c->cmd->proc != authCommand)
+    if ((server.requirepass || server.requirepass2) && !c->authenticated && c->cmd->proc != authCommand)
     {
         flagTransaction(c);
         addReply(c,shared.noautherr);
@@ -2392,9 +2393,12 @@ int time_independent_strcmp(char *a, char *b) {
 }
 
 void authCommand(redisClient *c) {
-    if (!server.requirepass) {
+    if (!server.requirepass && !server.requirepass2) {
         addReplyError(c,"Client sent AUTH, but no password is set");
-    } else if (!time_independent_strcmp(c->argv[1]->ptr, server.requirepass)) {
+    } else if (server.requirepass && !time_independent_strcmp(c->argv[1]->ptr, server.requirepass)) {
+      c->authenticated = 1;
+      addReply(c,shared.ok);
+    } else if (server.requirepass2 && !time_independent_strcmp(c->argv[1]->ptr, server.requirepass2)) {
       c->authenticated = 1;
       addReply(c,shared.ok);
     } else {
