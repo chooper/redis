@@ -634,10 +634,15 @@ void configSetCommand(redisClient *c) {
         sds *v = sdssplitlen(o->ptr,sdslen(o->ptr)," ",1,&vlen);
 
         /* Sanity check arguments. */
-        /* NOTE We don't require any args since administrators can choose to unset passwords. */
-        if (vlen > REDIS_REQUIREPASS_MAX) goto badfmt;
+        if (vlen > REDIS_REQUIREPASS_MAX) {
+            sdsfreesplitres(v,vlen);
+            goto badfmt;
+        }
         for (j = 0; j < vlen; j++) {
-            if (strlen(v[j]) > REDIS_AUTHPASS_MAX_LEN) goto badfmt;
+            if (strlen(v[j]) > REDIS_AUTHPASS_MAX_LEN) {
+                sdsfreesplitres(v,vlen);
+                goto badfmt;
+            }
         }
 
         /* Set the new config. */
