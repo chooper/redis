@@ -123,7 +123,7 @@ proc reconnect {args} {
     dict set srv "client" $client
 
     # select the right db when we don't have to authenticate
-    if {![dict exists $config "requirepass"] && ![dict exists $config "requirepass2"]} {
+    if {![dict exists $config "requirepass"]} {
         $client select 9
     }
 

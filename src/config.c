@@ -376,18 +376,21 @@ void loadServerConfigFromString(char *config) {
             if ((server.aof_load_truncated = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
-        } else if (!strcasecmp(argv[0],"requirepass") && argc == 2) {
-            if (strlen(argv[1]) > REDIS_AUTHPASS_MAX_LEN) {
-                err = "Password is longer than REDIS_AUTHPASS_MAX_LEN";
-                goto loaderr;
+        } else if (!strcasecmp(argv[0],"requirepass") && argc >= 2) {
+            int j, passwords = argc - 1;
+
+            if (passwords > REDIS_REQUIREPASS_MAX) {
+                err = "Too many passwords specified"; goto loaderr;
             }
-            server.requirepass = zstrdup(argv[1]);
-        } else if (!strcasecmp(argv[0],"requirepass2") && argc == 2) {
-            if (strlen(argv[1]) > REDIS_AUTHPASS_MAX_LEN) {
-                err = "Password is longer than REDIS_AUTHPASS_MAX_LEN";
-                goto loaderr;
+
+            for (j = 0; j < passwords; j++) {
+                if (strlen(argv[j+1]) > REDIS_AUTHPASS_MAX_LEN) {
+                    err = "Password is longer than REDIS_AUTHPASS_MAX_LEN";
+                    goto loaderr;
+                }
+                server.requirepass[j] = zstrdup(argv[j+1]);
             }
-            server.requirepass2 = zstrdup(argv[1]);
+            server.requirepass_count = passwords;
         } else if (!strcasecmp(argv[0],"pidfile") && argc == 2) {
             zfree(server.pidfile);
             server.pidfile = zstrdup(argv[1]);
@@ -627,13 +630,27 @@ void configSetCommand(redisClient *c) {
         zfree(server.rdb_filename);
         server.rdb_filename = zstrdup(o->ptr);
     } else if (!strcasecmp(c->argv[2]->ptr,"requirepass")) {
-        if (sdslen(o->ptr) > REDIS_AUTHPASS_MAX_LEN) goto badfmt;
-        zfree(server.requirepass);
-        server.requirepass = ((char*)o->ptr)[0] ? zstrdup(o->ptr) : NULL;
-    } else if (!strcasecmp(c->argv[2]->ptr,"requirepass2")) {
-        if (sdslen(o->ptr) > REDIS_AUTHPASS_MAX_LEN) goto badfmt;
-        zfree(server.requirepass2);
-        server.requirepass2 = ((char*)o->ptr)[0] ? zstrdup(o->ptr) : NULL;
+        int vlen, j;
+        sds *v = sdssplitlen(o->ptr,sdslen(o->ptr)," ",1,&vlen);
+
+        /* Sanity check arguments. */
+        /* NOTE We don't require any args since administrators can choose to unset passwords. */
+        if (vlen > REDIS_REQUIREPASS_MAX) goto badfmt;
+        for (j = 0; j < vlen; j++) {
+            if (strlen(v[j]) > REDIS_AUTHPASS_MAX_LEN) goto badfmt;
+        }
+
+        /* Set the new config. */
+        for (j = 0; j < vlen; j++) {
+            server.requirepass[j] = v[j] ? zstrdup(v[j]) : NULL;
+        }
+
+        /* Clear any remaining old passwords. */
+        for (j = vlen + 1; j < REDIS_REQUIREPASS_MAX; j++) {
+            server.requirepass[j] = NULL;
+        }
+        server.requirepass_count = vlen;
+        sdsfreesplitres(v,vlen);
     } else if (!strcasecmp(c->argv[2]->ptr,"masterauth")) {
         zfree(server.masterauth);
         server.masterauth = ((char*)o->ptr)[0] ? zstrdup(o->ptr) : NULL;
@@ -1024,8 +1041,6 @@ void configGetCommand(redisClient *c) {
 
     /* String values */
     config_get_string_field("dbfilename",server.rdb_filename);
-    config_get_string_field("requirepass",server.requirepass);
-    config_get_string_field("requirepass2",server.requirepass2);
     config_get_string_field("masterauth",server.masterauth);
     config_get_string_field("unixsocket",server.unixsocket);
     config_get_string_field("logfile",server.logfile);
@@ -1231,6 +1246,14 @@ void configGetCommand(redisClient *c) {
         sds aux = sdsjoin(server.bindaddr,server.bindaddr_count," ");
 
         addReplyBulkCString(c,"bind");
+        addReplyBulkCString(c,aux);
+        sdsfree(aux);
+        matches++;
+    }
+    if (stringmatch(pattern,"requirepass",0)) {
+        sds aux = sdsjoin(server.requirepass,server.requirepass_count," ");
+
+        addReplyBulkCString(c,"requirepass");
         addReplyBulkCString(c,aux);
         sdsfree(aux);
         matches++;
@@ -1651,6 +1674,28 @@ void rewriteConfigBindOption(struct rewriteConfigState *state) {
     rewriteConfigRewriteLine(state,option,line,force);
 }
 
+/* Rewrite the requirepass option. */
+void rewriteConfigRequirepassOption(struct rewriteConfigState *state) {
+    int force = 1;
+    sds line, passwords;
+    char *option = "requirepass";
+
+    /* Nothing to rewrite if we don't have passwords. */
+    if (server.requirepass_count == 0) {
+        rewriteConfigMarkAsProcessed(state,option);
+        return;
+    }
+
+    /* Rewrite as requirepass <addr1> <addr2> ... <addrN> */
+    passwords = sdsjoin(server.requirepass,server.requirepass_count," ");
+    line = sdsnew(option);
+    line = sdscatlen(line, " ", 1);
+    line = sdscatsds(line, passwords);
+    sdsfree(passwords);
+
+    rewriteConfigRewriteLine(state,option,line,force);
+}
+
 /* Glue together the configuration lines in the current configuration
  * rewrite state into a single string, stripping multiple empty lines. */
 sds rewriteConfigGetContentFromState(struct rewriteConfigState *state) {
@@ -1830,8 +1875,7 @@ int rewriteConfig(char *path) {
     rewriteConfigNumericalOption(state,"slave-priority",server.slave_priority,REDIS_DEFAULT_SLAVE_PRIORITY);
     rewriteConfigNumericalOption(state,"min-slaves-to-write",server.repl_min_slaves_to_write,REDIS_DEFAULT_MIN_SLAVES_TO_WRITE);
     rewriteConfigNumericalOption(state,"min-slaves-max-lag",server.repl_min_slaves_max_lag,REDIS_DEFAULT_MIN_SLAVES_MAX_LAG);
-    rewriteConfigStringOption(state,"requirepass",server.requirepass,NULL);
-    rewriteConfigStringOption(state,"requirepass2",server.requirepass2,NULL);
+    rewriteConfigRequirepassOption(state);
     rewriteConfigNumericalOption(state,"maxclients",server.maxclients,REDIS_MAX_CLIENTS);
     rewriteConfigBytesOption(state,"maxmemory",server.maxmemory,REDIS_DEFAULT_MAXMEMORY);
     rewriteConfigEnumOption(state,"maxmemory-policy",server.maxmemory_policy,

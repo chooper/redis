@@ -1423,8 +1423,6 @@ void initServerConfig(void) {
     server.pidfile = zstrdup(REDIS_DEFAULT_PID_FILE);
     server.rdb_filename = zstrdup(REDIS_DEFAULT_RDB_FILENAME);
     server.aof_filename = zstrdup(REDIS_DEFAULT_AOF_FILENAME);
-    server.requirepass = NULL;
-    server.requirepass2 = NULL;
     server.rdb_compression = REDIS_DEFAULT_RDB_COMPRESSION;
     server.rdb_checksum = REDIS_DEFAULT_RDB_CHECKSUM;
     server.stop_writes_on_bgsave_err = REDIS_DEFAULT_STOP_WRITES_ON_BGSAVE_ERROR;
@@ -2109,7 +2107,7 @@ int processCommand(redisClient *c) {
     }
 
     /* Check if the user is authenticated */
-    if ((server.requirepass || server.requirepass2) && !c->authenticated && c->cmd->proc != authCommand)
+    if (server.requirepass_count > 0 && !c->authenticated && c->cmd->proc != authCommand)
     {
         flagTransaction(c);
         addReply(c,shared.noautherr);
@@ -2393,18 +2391,23 @@ int time_independent_strcmp(char *a, char *b) {
 }
 
 void authCommand(redisClient *c) {
-    if (!server.requirepass && !server.requirepass2) {
+    if (server.requirepass_count < 1) {
         addReplyError(c,"Client sent AUTH, but no password is set");
-    } else if (server.requirepass && !time_independent_strcmp(c->argv[1]->ptr, server.requirepass)) {
-      c->authenticated = 1;
-      addReply(c,shared.ok);
-    } else if (server.requirepass2 && !time_independent_strcmp(c->argv[1]->ptr, server.requirepass2)) {
-      c->authenticated = 1;
-      addReply(c,shared.ok);
-    } else {
-      c->authenticated = 0;
-      addReplyError(c,"invalid password");
+        return;
     }
+
+    /* Search for a password match. */
+    for (int j = 0; j < server.requirepass_count; j++) {
+        if (!time_independent_strcmp(c->argv[1]->ptr, server.requirepass[j])) {
+            c->authenticated = 1;
+            addReply(c,shared.ok);
+            return;
+        }
+    }
+
+    /* If we made it this far, the password  was incorrect. */
+    c->authenticated = 0;
+    addReplyError(c,"invalid password");
 }
 
 /* The PING command. It works in a different way if the client is in
