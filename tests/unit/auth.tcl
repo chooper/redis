@@ -1,3 +1,4 @@
+# test no configured passwords
 start_server {tags {"auth"}} {
     test {AUTH fails if there is no password configured server side} {
         catch {r auth foo} err
@@ -79,3 +80,54 @@ start_server {tags {"auth"} overrides {requirepass {foo bar}}} {
         r incr foo
     } {101}
 }
+
+# test config setting passwords
+start_server {tags {"auth"}} {
+    test {CONFIG SET requires a password once one has been set} {
+        r config set requirepass foobar
+        catch {r set foo 100} err
+        set _ $err
+    } {NOAUTH*}
+
+    test {CONFIG SET goes from no password to one password with unsuccessful auth} {
+        catch {r auth wrong} err
+        set _ $err
+    } {ERR*invalid password}
+
+    test {CONFIG SET goes from no password to one password with successful auth} {
+        r auth foobar
+    } {OK}
+}
+
+start_server {tags {"auth"}} {
+    test {CONFIG SET goes from no password to two passwords with unsuccessful auth} {
+        r config set requirepass "foobar bizbaz"
+        catch {r auth wrong} err
+        set _ $err
+    } {ERR*invalid password}
+
+    test {CONFIG SET goes from no password to two passwords with successful auth} {
+        r auth foobar
+        r auth bizbaz
+    } {OK}
+}
+
+start_server {tags {"auth"}} {
+    test {CONFIG SET denies passwords that are too long} {
+        # (REDIS_AUTHPASS_MAX_LEN+1) = 513 chars
+        catch {r config set requirepass AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA} err
+        set _ $err
+    } {ERR Invalid argument*}
+
+    test {CONFIG SET denies too many passwords} {
+        # (REDIS_REQUIREPASS_MAX+1) = 9 passwords
+        catch {r config set requirepass "foobar1 foobar2 foobar3 foobar4 foobar5 foobar6 foobar7 foobar8 foobar9"} err
+        set _ $err
+    } {ERR Invalid argument*}
+
+    test {CONFIG SET allows setting the same passwords} {
+        r config set requirepass "foobar foobar"
+        r auth foobar
+    } {OK}
+}
+
