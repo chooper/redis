@@ -1691,7 +1691,7 @@ void rewriteConfigRequirepassOption(struct rewriteConfigState *state) {
         return;
     }
 
-    /* Rewrite as requirepass <addr1> <addr2> ... <addrN> */
+    /* Rewrite as requirepass <passwd1> <passwd2> ... <passwdN> */
     passwords = sdsjoin(server.requirepass,server.requirepass_count," ");
     line = sdsnew(option);
     line = sdscatlen(line, " ", 1);
